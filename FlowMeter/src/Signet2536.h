@@ -7,13 +7,25 @@
 #ifndef SIGNET_2536_H
 #define SIGNET_2536_H
 
+#define SECONDS_TO_SAMPLE 15
+#define K_FACTOR_1_25_INCH 47.2
+#define ENABLE_PIN 15
+#define INPUT_PIN 16
+
 class Signet2536
 {
-private:
-  enum SampleState {idle, sampling, calculating, data ready}
 public:
-  start(int enablePin, int signalPin);
-
+  Signet2536(float kFactor);
+  void startSampling();
+  bool isSampleReady();
+  float getSample();
+  static void tickTimerCallback();
+private:
+  float kFactor;
+  int pulses;
+  static int ticks;
+  enum SampleState {idle, sampling, calculating, dataReady};
+  static SampleState state;
 };
 
 #endif
