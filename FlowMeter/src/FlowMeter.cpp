@@ -11,7 +11,7 @@
  * Pins are as follows:
  * Board Pin#     Description
  * A1/D15         Voltage booster enable
- * A2             Flow meter signal
+ * A2/D16         Flow meter signal
  * More as components are included
  */
 #include <arduino.h>
@@ -23,11 +23,16 @@
 #define ULONG_MAX 4294967295           //2^32 - 1
 #define K_FACTOR_1_25_INCH 47.2        //Pulses per liter
 
-//Function prototype so I can put main first
+//Function prototype
 void meterPinISR();                    //Interrupt for meter signal
 
 //Some gloabls for time and record keeping
 volatile unsigned long pulses;         //Count of pulses during each sample
+unsigned long currentTick;
+unsigned long msDifference;
+unsigned long sampleStart;
+unsigned long lastSample;
+float flowRate;
 
 /* States for FSM type operations, allowing for multiple simultaneous
  * functions (mostly) without blocking flow.
@@ -59,20 +64,19 @@ volatile FlowMeterState meterState = meterIdle;
  */
 //enum MeshRadioState { mrIdle, packetReceived, appendPathData, transmit};
 
-int main()
+
+void setup()
 {
   //Take serial out later
   Serial.begin(9600);
 
   //Setup functions
   //Initialize variables
-
-
-  unsigned long currentTick = millis();
-  unsigned long msDifference = 0;
-  unsigned long sampleStart = 0;
-  unsigned long lastSample = 0;
-  float flowRate = 0;
+  currentTick = millis();
+  msDifference = 0;
+  sampleStart = 0;
+  lastSample = 0;
+  flowRate = 0;
   pulses = 0;
 
   //Set up pins
@@ -80,60 +84,59 @@ int main()
   pinMode(METER_INPUT_PIN, INPUT_PULLUP);
   //Attach ISR for meter pin
   attachInterrupt(digitalPinToInterrupt(METER_INPUT_PIN), meterPinISR, FALLING);
-
-  // //continuous loop
-  while (true)
-  {
-    //Store current timestamp
-    currentTick = millis();
-    if (currentTick < lastSample)
-    {
-      msDifference = currentTick + (ULONG_MAX - lastSample);
-    }
-    else
-    {
-      msDifference = currentTick - lastSample;
-    }
-    //Check for millis() overflow, should happen once every 50 days or so
-    switch (meterState)
-    {
-      case meterIdle:
-        if (msDifference >= SAMPLE_FREQUENCY * 60 * 1000)
-        {
-          meterState = beginSampling;
-        }
-      break;
-      case beginSampling:
-        Serial.println("Beginning a sample...");
-        lastSample = currentTick;
-        sampleStart = currentTick;            //store start time
-        pulses = 0;                           //reset the pulse count
-        flowRate = 0;
-        digitalWrite(METER_ENABLE_PIN, HIGH); //Enable the voltage boost
-        meterState = sampling;
-      break;
-      case sampling:
-        if (currentTick - sampleStart > SAMPLE_DURATION * 1000)
-        {
-          meterState = stopSampling;
-        }
-      break;
-      case stopSampling:
-        digitalWrite(METER_ENABLE_PIN, LOW);  //Disable voltage boost
-        flowRate = (pulses * K_FACTOR_1_25_INCH / SAMPLE_DURATION);
-        Serial.print("Sample rate: ");
-        Serial.print(flowRate);
-        Serial.println(" l/s.");
-        meterState = meterIdle;
-      break;
-
-    }
-
-    delay(5);
-  }
-  return 0;
 }
 
+void loop()
+{
+  //Store current timestamp
+  currentTick = millis();
+  if (currentTick < lastSample)
+  {
+    msDifference = currentTick + (ULONG_MAX - lastSample);
+  }
+  else
+  {
+    msDifference = currentTick - lastSample;
+  }
+  //Check for millis() overflow, should happen once every 50 days or so
+  switch (meterState)
+  {
+    case meterIdle:
+      if (msDifference >= SAMPLE_FREQUENCY * 60 * 1000)
+      {
+        meterState = beginSampling;
+      }
+    break;
+    case beginSampling:
+      Serial.println("Beginning a sample...");
+      lastSample = currentTick;
+      sampleStart = currentTick;            //store start time
+      pulses = 0;                           //reset the pulse count
+      flowRate = 0;
+      digitalWrite(METER_ENABLE_PIN, HIGH); //Enable the voltage boost
+      meterState = sampling;
+    break;
+    case sampling:
+      if (currentTick - sampleStart > SAMPLE_DURATION * 1000)
+      {
+        meterState = stopSampling;
+      }
+    break;
+    case stopSampling:
+      digitalWrite(METER_ENABLE_PIN, LOW);  //Disable voltage boost
+      flowRate = ((pulses / K_FACTOR_1_25_INCH) / SAMPLE_DURATION);
+      Serial.print("Sample rate: ");
+      Serial.print(flowRate);
+      Serial.println(" l/s.");
+      meterState = meterIdle;
+    break;
+
+  }
+
+  delay(5);
+}
+
+//ISR for falling signal on meter input pin. Increments pulse count.
 void meterPinISR()
 {
   if (meterState == sampling)
