@@ -7,32 +7,49 @@
  * Monitors and transmits data from a Signet 2536 padlewheel flow meter
  * Flow meter is powered from an Adafruit Verter Buck/Boost controller
  * Requests and receives data from the Camera Subsystem via NRF24L01+ ISM radio
- *
- * Pins are as follows:
+ */
+
+#include <arduino.h>
+#include "RF24.h"
+
+/* Pins are as follows:
  * Board Pin#     Description
  * A1/D15         Voltage booster enable
  * A2/D16         Flow meter signal
+ * A4/D18         ISM radio enable
+ * A5/D19         ISM radio chip select
+ * SCK/MOSI/MISO  SPI pins for ISM radio
  * More as components are included
  */
-#include <arduino.h>
 
-#define SAMPLE_FREQUENCY 1UL           //in minutes
-#define SAMPLE_DURATION 15UL           //in seconds
 #define METER_ENABLE_PIN 15
 #define METER_INPUT_PIN 16
+#define ISM_ENABLE 19
+#define ISM_CS 19
+
+//Constant definitions
+#define SAMPLE_FREQUENCY 1UL           //in minutes
+#define SAMPLE_DURATION 15UL           //in seconds
 #define ULONG_MAX 4294967295           //2^32 - 1
 #define K_FACTOR_1_25_INCH 47.2        //Pulses per liter
+#define ISM_BUFFER_MAX 32              //Max radio size
+#define ISM_TIMEOUT_MS 15000           //ms to wait for cow presence data
 
-//Function prototype
+//Function prototype(s)
 void meterPinISR();                    //Interrupt for meter signal
 
-//Some gloabls for time and record keeping
+//global objects
+RF24 ism(ISM_ENABLE, ISM_CS);
+
+//global variables
 volatile unsigned long pulses;         //Count of pulses during each sample
 unsigned long currentTick;
 unsigned long msDifference;
 unsigned long sampleStart;
 unsigned long lastSample;
 float flowRate;
+byte ismAddr[][6] = {{'F','L','O','W','M','T'},{'C','A','M','E','R','A'}};
+char ismBuf[ISM_BUFFER_MAX];
 
 /* States for FSM type operations, allowing for multiple simultaneous
  * functions (mostly) without blocking flow.
@@ -48,9 +65,10 @@ float flowRate;
  * makePacket       Upon response received from the Camera encode a mesh packet
  * transmitPacket   Push the packet to the mesh network and return to idle
  */
-enum FlowMeterState { meterIdle, beginSampling, sampling, stopSampling};
-                      //requestIR, waitForIR, makePacket,
+enum FlowMeterState { meterIdle, beginSampling, sampling, stopSampling,
+                      requestIR, waitForIR//, makePacket,
                       //transmitPacket};
+                    };
 volatile FlowMeterState meterState = meterIdle;
 /* States for LoRa radio FSM
  * State            Function
@@ -71,6 +89,20 @@ void setup()
   Serial.begin(9600);
 
   //Setup functions
+  //Start hardware
+  //start the ISM radio
+  ism.begin();
+  ism.setPALevel(RF24_PA_LOW);
+  ism.setRetries(15,15);
+  ism.setAutoAck(true);
+  ism.enableDynamicPayloads();
+  ism.openWritingPipe(ismAddr[1]);
+  ism.openReadingPipe(1,ismAddr[0]);
+  for (int i = 0; i < ISM_BUFFER_MAX; i++)
+  {//Initialize the buffer
+    ismBuf[i]=0;
+  }
+
   //Initialize variables
   currentTick = millis();
   msDifference = 0;
@@ -91,7 +123,7 @@ void loop()
   //Store current timestamp
   currentTick = millis();
   if (currentTick < lastSample)
-  {
+  {//account for overflow
     msDifference = currentTick + (ULONG_MAX - lastSample);
   }
   else
@@ -130,10 +162,30 @@ void loop()
       Serial.println(" l/s.");
       meterState = meterIdle;
     break;
-
+    case requestIR:
+      Serial.println("Requesting cow presence...");
+      ism.stopListening();  //probably unnecessary
+      byte xmitBuf[1];
+      xmitBuf[0] = {'C'};
+      if (ism.write(xmitBuf,sizeof(char)))
+      {
+        ism.startListening();
+        meterState = waitForIR;
+      }
+    break;
+    case waitForIR:
+      if (ism.available())
+        {
+          ism.read(ismBuf, ISM_BUFFER_MAX);
+          Serial.print("Received: ");
+          Serial.println(ismBuf);
+          ism.stopListening();
+          meterState = meterIdle;
+        }
+    break;
   }
 
-  delay(5);
+  delay(10);
 }
 
 //ISR for falling signal on meter input pin. Increments pulse count.
