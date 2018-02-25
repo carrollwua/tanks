@@ -24,7 +24,7 @@
 
 #define METER_ENABLE_PIN 15
 #define METER_INPUT_PIN 16
-#define ISM_ENABLE 19
+#define ISM_ENABLE 18
 #define ISM_CS 19
 
 //Constant definitions
@@ -33,7 +33,7 @@
 #define ULONG_MAX 4294967295           //2^32 - 1
 #define K_FACTOR_1_25_INCH 47.2        //Pulses per liter
 #define ISM_BUFFER_MAX 32              //Max radio size
-#define ISM_TIMEOUT_MS 15000           //ms to wait for cow presence data
+#define ISM_TIMEOUT_MS 5000           //ms to wait for cow presence data
 
 //Function prototype(s)
 void meterPinISR();                    //Interrupt for meter signal
@@ -47,9 +47,11 @@ unsigned long currentTick;
 unsigned long msDifference;
 unsigned long sampleStart;
 unsigned long lastSample;
+unsigned long lastIRreq;
 float flowRate;
 byte ismAddr[][6] = {{'F','L','O','W','M','T'},{'C','A','M','E','R','A'}};
 char ismBuf[ISM_BUFFER_MAX];
+char presenceReq = 'C';
 
 /* States for FSM type operations, allowing for multiple simultaneous
  * functions (mostly) without blocking flow.
@@ -93,11 +95,11 @@ void setup()
   //start the ISM radio
   ism.begin();
   ism.setPALevel(RF24_PA_LOW);
-  ism.setRetries(15,15);
+  ism.setRetries(15,5);
   ism.setAutoAck(true);
-  ism.enableDynamicPayloads();
+  ism.setPayloadSize(1);
   ism.openWritingPipe(ismAddr[1]);
-  ism.openReadingPipe(1,ismAddr[0]);
+  ism.openReadingPipe(0,ismAddr[0]);
   for (int i = 0; i < ISM_BUFFER_MAX; i++)
   {//Initialize the buffer
     ismBuf[i]=0;
@@ -110,6 +112,7 @@ void setup()
   lastSample = 0;
   flowRate = 0;
   pulses = 0;
+  lastIRreq=0;
 
   //Set up pins
   pinMode(METER_ENABLE_PIN, OUTPUT);
@@ -160,28 +163,42 @@ void loop()
       Serial.print("Sample rate: ");
       Serial.print(flowRate);
       Serial.println(" l/s.");
-      meterState = meterIdle;
+      meterState = requestIR;
     break;
     case requestIR:
-      Serial.println("Requesting cow presence...");
       ism.stopListening();  //probably unnecessary
-      byte xmitBuf[1];
-      xmitBuf[0] = {'C'};
-      if (ism.write(xmitBuf,sizeof(char)))
+      delay(10);
+      Serial.println("Requesting cow presence");
+      if (ism.write(&presenceReq,ism.getPayloadSize()))
       {
+        Serial.println("Request sent.");
         ism.startListening();
+        delay(10);
         meterState = waitForIR;
+        lastIRreq=currentTick;
+      }
+      else
+      {
+        Serial.print("Receiver did not acknowledge");
+        meterState = meterIdle;
       }
     break;
     case waitForIR:
       if (ism.available())
         {
+          Serial.println("Reading response...");
           ism.read(ismBuf, ISM_BUFFER_MAX);
           Serial.print("Received: ");
           Serial.println(ismBuf);
           ism.stopListening();
           meterState = meterIdle;
         }
+      else if (currentTick - lastIRreq > ISM_TIMEOUT_MS)
+      {
+        Serial.print("IR request timed out.");
+        ism.stopListening();
+        meterState = meterIdle;
+      }
     break;
   }
 
