@@ -91,7 +91,7 @@ void loop()
   //Store current timestamp
   currentTick = millis();
   if (currentTick < lastSample)
-  {
+  {//Account for millis() overflow;
     msDifference = currentTick + (ULONG_MAX - lastSample);
   }
   else
