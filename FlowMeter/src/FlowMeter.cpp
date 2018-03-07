@@ -137,10 +137,8 @@ void loop()
 }
 
 //ISR for falling signal on meter input pin. Increments pulse count.
-void meterPinISR()
-{
-  if (meterState == sampling)
-  {
+void meterPinISR(){
+  if (meterState == sampling){
     pulses++;
   }
 }
