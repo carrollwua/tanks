@@ -247,7 +247,7 @@ void setup()
             rxString = String((char*)rxBuf);
             if (rxString.startsWith("OK"))
             {//Status check
-              txString = "AOK";
+              txString = "AOK " + String(millis());
               txLength = txString.length()+1;
               txString.getBytes(txBuf, txLength);
               txResult = mesh.sendtoWait(txBuf, txLength, MESH_ENDPOINT_ADDRESS);
