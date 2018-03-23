@@ -245,7 +245,17 @@ void setup()
           if (mesh.recvfromAckTimeout(rxBuf, &rxLength, (SAMPLE_FREQUENCY * 60 * 1000) - msDifference))
           {
             rxString = String((char*)rxBuf);
-            //TODO: Handle possible actions like sample request here
+            if (rxString.startsWith("OK"))
+            {//Status check
+              txString = "AOK";
+              txLength = txString.length()+1;
+              txString.getBytes(txBuf, txLength);
+              txResult = mesh.sendtoWait(txBuf, txLength, MESH_ENDPOINT_ADDRESS);
+            }
+            else if (rxString.startsWith("SF"))
+            {//Sample flow request
+              meterState = beginSampling;
+            }
           }
         }
       break;
