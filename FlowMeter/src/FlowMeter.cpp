@@ -112,7 +112,6 @@ void setup()
     currentTick = millis();
     msDifference = 0;
     sampleStart = 0;
-    lastSample = 0;
     flowRate = 0;
     pulses = 0;
 
@@ -235,10 +234,20 @@ void setup()
         meterState = meterIdle;
       break;
       case meterIdle:
-      if (msDifference >= SAMPLE_FREQUENCY * 60 * 1000)
-      {
-          meterState = beginSampling;
-      }
+        if (msDifference >= SAMPLE_FREQUENCY * 60 * 1000)
+        {// If it's time to sample, do so
+            meterState = beginSampling;
+        }
+        else
+        {// If not, relay mesh network messages until it is time
+          rxLength = RH_MESH_MAX_MESSAGE_LEN;
+
+          if (mesh.recvfromAckTimeout(rxBuf, &rxLength, (SAMPLE_FREQUENCY * 60 * 1000) - msDifference))
+          {
+            rxString = String((char*)rxBuf);
+            //TODO: Handle possible actions like sample request here
+          }
+        }
       break;
       case beginSampling:
       Serial.println("Beginning a sample...");
@@ -299,7 +308,6 @@ void setup()
     }
 
     delay(5);
-
   }
 
   //ISR for falling signal on meter input pin. Increments pulse count.
