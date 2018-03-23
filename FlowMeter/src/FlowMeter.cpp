@@ -36,8 +36,11 @@
 #define SAMPLE_DURATION 15UL           //in seconds
 #define K_FACTOR_1_25_INCH 47.2        //Pulses per liter
 #define RF95_FREQ 915.0                //In MHz, License free band
-#define MESH_ADDRESS 1              //TODO: Addressing by switches
-#define MESH_ENDPOINT_ADDRESS 0     //Mesh network endpoint address
+#define MESH_ADDRESS 1                 //TODO: Addressing by switches
+#define MESH_ENDPOINT_ADDRESS 0        //Mesh network endpoint address
+#define MESH_ACK_TIMEOUT 4U            //Time to wait for an acknowledgement
+#define MESH_CONNECT_FLASH_SECONDS 5   //Number of seconds to flash after power
+                                       //if mesh network connected
 #define ULONG_MAX 4294967295           //2^32 - 1
 
 //Function prototype
@@ -55,9 +58,13 @@ unsigned long sampleStart;
 unsigned long lastSample;
 float flowRate;
 uint8_t txBuf[RH_MESH_MAX_MESSAGE_LEN];
-String txBufBuilder;
+String txString;
 uint8_t txResult;
-unsigned int messageLength;
+unsigned int txLength;
+uint8_t rxBuf[RH_MESH_MAX_MESSAGE_LEN];
+String rxString;
+uint8_t rxLength;
+uint8_t rxSender;
 
 /* States for FSM type operations, allowing for multiple simultaneous
 * functions (mostly) without blocking flow.
@@ -73,9 +80,10 @@ unsigned int messageLength;
 * makePacket       Upon response received from the Camera encode a mesh packet
 * transmitPacket   Push the packet to the mesh network and return to idle
 */
-enum FlowMeterState { meterIdle, beginSampling, sampling, stopSampling,
+enum FlowMeterState { routeRequest, routeRequestRetry, waitForRouteAck,
+                      meterIdle, beginSampling, sampling, stopSampling,
                       transmitPacket};
-  volatile FlowMeterState meterState = meterIdle;
+volatile FlowMeterState meterState = routeRequest;
 
 void setup()
   {
@@ -83,11 +91,14 @@ void setup()
     pinMode(METER_ENABLE_PIN, OUTPUT);
     pinMode(METER_INPUT_PIN, INPUT_PULLUP);
     pinMode(LORA_RESET, OUTPUT);
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
 
     //Enable radio
     digitalWrite(LORA_RESET, HIGH);
     //TODO:Take serial out later
     Serial.begin(9600);
+    //while (!Serial);
 
     //Manual radio reset
     delay(100);
@@ -140,6 +151,89 @@ void setup()
     //Check for millis() overflow, should happen once every 50 days or so
     switch (meterState)
     {
+      case routeRequest:
+        /*Try to contact the endpoint and display some connection status.
+         *This state should only be encounterd on power on or reset.
+         *If a route error occurs, move to a single retry state.
+         *If no error occurs, move to a receive state.
+         *If any other error occurs, move to active and try establishing route
+         *  later.
+        */
+        Serial.print("Sending route request 1: ");
+        txString = "RR";
+        txLength = txString.length()+1;
+        txString.getBytes(txBuf, txLength);
+        txResult = mesh.sendtoWait(txBuf, txLength, MESH_ENDPOINT_ADDRESS);
+        if (txResult == RH_ROUTER_ERROR_NONE)
+        {
+          Serial.println("Sent.");
+          meterState = waitForRouteAck;
+        }
+        else if (txResult == RH_ROUTER_ERROR_NO_ROUTE)
+        {
+          Serial.println("Not sent, retrying.");
+          meterState = routeRequestRetry;
+        }
+        else
+        {
+          Serial.println("Not sent, error.");
+          meterState = meterIdle;
+        }
+      break;
+      case routeRequestRetry:
+      /*
+       * An attempt at routing to the base station has been made and a route
+       * error occurred. This retries sending the ack request once. If it's
+       * successfully sent, move to a receive state. if not, move to idle and
+       * try routing later.
+      */
+        Serial.print("Sending route retry: ");
+        txString = "RR";
+        txLength = txString.length()+1;
+        txString.getBytes(txBuf, txLength);
+        txResult = mesh.sendtoWait(txBuf, txLength, MESH_ENDPOINT_ADDRESS);
+        if (txResult == RH_ROUTER_ERROR_NONE)
+        {
+          Serial.println("Sent.");
+          meterState = waitForRouteAck;
+        }
+        else
+        {
+          Serial.println("Not sent, error.");
+          meterState = meterIdle;
+        }
+      break;
+      case waitForRouteAck:
+        /*
+         * Wait for a reply to the route request. If one is received flash the
+         * onboard LED to let the user know connection established
+        */
+        Serial.print("Waiting for ack: ");
+        rxLength = RH_MESH_MAX_MESSAGE_LEN;
+        if (mesh.recvfromAckTimeout(rxBuf, &rxLength, MESH_ACK_TIMEOUT * 1000, &rxSender))
+        {
+          Serial.println("Message received.");
+          Serial.print("Length: "); Serial.println(rxLength);
+          Serial.print("Contents: ");
+          rxString = String((char*)rxBuf);
+          Serial.println(rxString);
+          if (rxString.startsWith("EA"))
+          {
+            for (int i = 0; i < MESH_CONNECT_FLASH_SECONDS; i++)
+            {
+              digitalWrite(LED_BUILTIN, HIGH);
+              delay (500);
+              digitalWrite(LED_BUILTIN, LOW);
+              delay (500);
+            }
+          }
+        }
+        else
+        {
+          Serial.println("Wait for ack timed out.");
+        }
+        meterState = meterIdle;
+      break;
       case meterIdle:
       if (msDifference >= SAMPLE_FREQUENCY * 60 * 1000)
       {
@@ -174,14 +268,14 @@ void setup()
       break;
       case transmitPacket:
       Serial.println("Building packet...");
-      txBufBuilder = String(MESH_ADDRESS) + " " + String(flowRate,2);
+      txString = String(MESH_ADDRESS) + " " + String(flowRate,2);
       Serial.print("Packet: ");
-      Serial.println(txBufBuilder);
-      messageLength = txBufBuilder.length();
-      Serial.print("Length: "); Serial.println(messageLength);
-      txBufBuilder.getBytes(txBuf,  messageLength + 1);
+      Serial.println(txString);
+      txLength = txString.length() + 1;
+      Serial.print("Length: "); Serial.println(txLength);
+      txString.getBytes(txBuf,  txLength);
       Serial.println("Sending packet:");
-      txResult = mesh.sendtoWait(txBuf, messageLength, MESH_ENDPOINT_ADDRESS);
+      txResult = mesh.sendtoWait(txBuf, txLength, MESH_ENDPOINT_ADDRESS);
       if(txResult == RH_ROUTER_ERROR_NONE)
       {
         Serial.println("Packet transmitted successfully.");
