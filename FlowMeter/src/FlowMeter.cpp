@@ -6,7 +6,6 @@
 * Designed for the Adafruit Feather M0 LoRa
 * Monitors and transmits data from a Signet 2536 paddlewheel flow meter
 * Flow meter is powered from an Adafruit Verter Buck/Boost controller
-* Requests and receives data from the Camera Subsystem via NRF24L01+ ISM radio
 *
 * Pins are as follows:
 * Board Pin#     Description
@@ -60,7 +59,7 @@ float flowRate;
 uint8_t txBuf[RH_MESH_MAX_MESSAGE_LEN];
 String txString;
 uint8_t txResult;
-unsigned int txLength;
+uint8_t txLength;
 uint8_t rxBuf[RH_MESH_MAX_MESSAGE_LEN];
 String rxString;
 uint8_t rxLength;
